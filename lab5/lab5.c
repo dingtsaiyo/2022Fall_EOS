@@ -10,12 +10,15 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>         // close()
+#include <pthread.h>
 
-#define CLIENT_NUM 3
+#define CLIENT_MAXIMUN 10
 #define BUFSIZE 1024
 #define errexit(format, arg ...) exit(printf(format, ##arg))
 
-int sockfd, connfd[CLIENT_NUM];     /* socket descriptor */
+int sockfd, connfd[CLIENT_MAXIMUN];     /* socket descriptor */
+unsigned int connfd_occupied[CLIENT_MAXIMUN] = {0};
+pid_t childs_pid[CLIENT_MAXIMUN];
 
 /* zombie process handler */
 void zombie_process_handler(int signum)
@@ -27,10 +30,15 @@ void zombie_process_handler(int signum)
 void interrupt_handler(int signum) 
 {
     close(sockfd);
+    
+    int i;
+    for (i = 0; i < CLIENT_MAXIMUN; i++)
+        close(connfd[i]);
 }
 
 int passivesock(const char *service, const char *transport, int qlen);  /* create server */
 void childprocess(int client_number);    /* function for child process */
+void *wait_for_child(void *threadid);
 
 /* main function */
 int main(int argc, char *argv[])
@@ -41,33 +49,45 @@ int main(int argc, char *argv[])
     signal(SIGCHLD, zombie_process_handler);
     signal(SIGINT, interrupt_handler);
 
-    unsigned short child_index = 0;
-    pid_t child_pid[CLIENT_NUM];
+    unsigned short i, client_index = 0;
+
+    pthread_t thread;
+    int rc = pthread_create(&thread, NULL, wait_for_child, (void *)0);
+    if (rc){
+        printf("ERROR; pthread_create() returns %d\n", rc);
+        exit(EXIT_FAILURE);
+    }
 
     /* create socket and bind socket to port */
     sockfd = passivesock(argv[1], "tcp", 10);
 
-    /* create 3 children */
-    while (child_index < CLIENT_NUM) {
-        child_pid[child_index] = fork();
-        if (child_pid[child_index] >= 0) {
-            if (child_pid[child_index] == 0) {
-                /* CHILD: accept connection of clients and execute "sl" command */
-                childprocess(child_index);
+    struct sockaddr_in addr_cln[CLIENT_MAXIMUN];
+    socklen_t sLen = sizeof(addr_cln[0]);
+
+    /* Keep accept client connection */
+    while (1) {
+        client_index = 0;
+        i = 0;
+        while (connfd_occupied[i++] == 1) {
+            // Find non-occupied connfd
+            client_index = i;
+        }
+        connfd_occupied[client_index] = 1;  // set occupied
+        printf("The first available client: %d\n", client_index);
+
+        connfd[client_index] = accept(sockfd, (struct sockaddr *)&addr_cln[client_index], &sLen);
+        if (connfd[client_index] == -1)     errexit("Error: accept() of client %d\n", client_index);
+
+        childs_pid[client_index] = fork();
+        if (childs_pid[client_index] >= 0) {
+            if (childs_pid[client_index] == 0) {
+                childprocess(client_index);
             } else {
-                /* PARENT */
-                if (child_index == CLIENT_NUM - 1) {
-                    /* PARNET: print out the childpid of all children */
-                    child_index = 0;
-                    while(child_index < CLIENT_NUM)
-                        printf("Train ID: %d\n", child_pid[child_index++]);
-                } else {
-                    /* PARENT: create the next child */
-                    child_index++;
-                }
+                printf("Train ID: %d\n", childs_pid[client_index]);
             }
         } else {
-            errexit("Can't create child %d\n", child_index);
+            perror("fork");
+            exit(0);
         }
     }
 
@@ -78,20 +98,36 @@ int main(int argc, char *argv[])
 }
 
 void childprocess(int client_number)
-{
-    struct sockaddr_in addr_cln[CLIENT_NUM];
-    socklen_t sLen = sizeof(addr_cln[0]);
-
-    connfd[client_number] = accept(sockfd, (struct sockaddr *)&addr_cln[client_number], &sLen);
-    if (connfd[client_number] == -1)
-        errexit("Error: accept() of client %d\n", client_number);
-    
+{    
     dup2(connfd[client_number], STDOUT_FILENO);
     close(connfd[client_number]);
 
     execlp("sl", "sl", "-l", NULL);
 
     exit(0);    
+}
+
+/* function of thread */
+void *wait_for_child(void *threadid) {
+    long tid  = (long)threadid;
+    int i = 0;
+    pid_t pid;
+
+    // Keep tracking the exit of all running child processes
+    while (1) {
+        for (i = 0; i < CLIENT_MAXIMUN; i++) {
+            // Check all running processes
+            if (connfd_occupied[i] == 1) {
+                pid = waitpid(childs_pid[i], NULL, WNOHANG);
+                if (pid == childs_pid[i]) {
+                    // child process exit
+                    connfd_occupied[i] = 0; // set non-occupied
+                }
+            }
+        }
+    }
+
+    pthread_exit(NULL);
 }
 
 /*
@@ -128,6 +164,10 @@ int passivesock(const char *service, const char *transport, int qlen)
     s = socket(PF_INET, type, 0);
     if (s < 0)
         errexit("Can't create socket: %s\n", strerror(errno));
+    
+    /* Force using socket address already in use */
+    int yes = 1;
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
     
     /* Bind the socket */
     if (bind(s, (struct sockaddr *)&sin, sizeof(sin)) < 0)

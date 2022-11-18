@@ -6,8 +6,6 @@ PORT=1235
 make clean
 make
 
-kill $(lsof -ti :$PORT)
-
 tmux has-session -t $SESSION 2>/dev/null
 
 if [[ $? -eq 0 ]]
@@ -21,7 +19,7 @@ tmux split-window -v -p 75
 tmux split-window -v -p 66
 tmux split-window -v -p 50
 
-tmux send-keys -t 0 "./lab5.o $PORT" C-m
+tmux send-keys -t 0 "./lab5 $PORT" C-m
 sleep 1
 
 for i in {1..3}
