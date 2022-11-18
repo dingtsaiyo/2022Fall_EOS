@@ -1,0 +1,10 @@
+ 1147  sudo make
+ 1148  scp driver.ko pi@192.168.0.199:~/EOS/HW1_elisa
+ 1149  sudo dmesg | tail -1
+ 1150  sudo dmesg
+ 1151  sudo insmod driver.ko
+ 1152  sudo make
+ 1153  scp driver.ko pi@192.168.0.199:~/EOS/HW1_elisa
+ 1154  sudo make
+ 1155  scp driver.ko pi@192.168.0.199:~/EOS/HW1_elisa
+
