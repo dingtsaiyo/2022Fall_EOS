@@ -31,10 +31,14 @@ int main(int argc, char *argv[])
         if ((n = read(connfd, rcv, BUFSIZE)) == -1)
             errexit("Error: read()\n");
         
+        printf("n = %d\n", n);
+        
         /* write message back to the client */
         n = sprintf(snd, "Server: %.*s", n, rcv);
+        printf("n = %d\n", n);
         if ((n = write(connfd, snd, n)) == -1)
             errexit("Error: write()\n");
+        printf("n = %d\n", n);
         
         /* close client connection */
         close(connfd);

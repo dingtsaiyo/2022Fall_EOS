@@ -13,6 +13,7 @@
 #define STRING_SIZE 100
 
 int sockfd, connfd;
+const int DEBUG = 0;
 
 /* Ctrl-C interrupt handler */
 void interrupt_handler(int signum) 
@@ -29,7 +30,7 @@ int main(int argc, char *argv[])
     signal(SIGINT, interrupt_handler);
 
     int command_length;
-    int i, j, pow;
+    int i, j, pow, n;
     struct sockaddr_in addr_cln;
     socklen_t sLen = sizeof(addr_cln);
     char snd[BUF_SIZE], rcv[BUF_SIZE];
@@ -49,7 +50,8 @@ int main(int argc, char *argv[])
         /* Waiting for new connection... */
         printf("Waiting for connection...\n");
         connfd = accept(sockfd, (struct sockaddr *)&addr_cln, &sLen);
-        if (connfd == -1)       goto err_accept;
+        if (connfd == -1)
+            goto err_accept;
         
         /* Connection has been established!! */
         printf("Connection has been established!!\n");
@@ -60,24 +62,32 @@ int main(int argc, char *argv[])
 
             // Read user commands from the client
             memset(rcv, 0, BUF_SIZE);
-            if (read(connfd, rcv, BUF_SIZE) == -1)    goto err_read;
+            if ((n = read(connfd, rcv, BUF_SIZE)) == -1) {
+                goto err_read;
+            }
+            printf("Server receives: %s\n", rcv);
 
             if (strstr(rcv, "list") != NULL) {
                 // Write the menu to the client
-                sprintf(snd, "1. Confirmed case\n2. Reporting system\n3. Exit\n");
-                if (write(connfd, snd, sizeof(snd)) == -1)    goto err_write;
+                n = sprintf(snd, "%s", "1. Confirmed case\n2. Reporting system\n3. Exit\n");
+
+                if ((n = write(connfd, snd, n)) == -1) {
+                    if (DEBUG)  fprintf(stderr, "[list] ");
+                    goto err_write;
+                }
+                printf("Server sends: %s\n", snd);
                 continue;
             }
-
-            for (i = 0; i < BUF_SIZE; i++)
-                memset(command[i], 0, STRING_SIZE);
             
-            // Split the received string w.r.t. '|'    
+            // Split the received string w.r.t. '|'
+            rcv[n] = '\0';
             p = strtok(rcv, " |\n");
             while (p != NULL) {
+                if (DEBUG)  printf("%s\n", p);
                 strcpy(command[command_length++], p);
                 p = strtok(NULL, " |\n");
             }
+            if (DEBUG)  printf("command length = %d\n", command_length);
 
             i = 0;
             memset(snd, 0, BUF_SIZE);
@@ -86,11 +96,15 @@ int main(int argc, char *argv[])
                 if (command_length == 2) {
                     // List the number of confirmed cases of all regions
                     while (i < REGION_NUM) {
-                        sprintf(temp, "%d : %d\n", i, mild_case[i]+severe_case[i]);
+                        n = sprintf(temp, "%d : %d\n", i, mild_case[i]+severe_case[i]);
                         strcat(snd, temp);
                         i++;
                     }
-                    if (write(connfd, snd, sizeof(snd)) == -1)    goto err_write;
+                    if ((n = write(connfd, snd, sizeof(snd))) == -1) {
+                        if (DEBUG)  fprintf(stderr, "[Confirmed case (all)] ");
+                        goto err_write;
+                    }
+                    printf("Server sends: %s\n", snd);
                 } else if (command_length % 2 == 0) {
                     // List the number of confirmed cases of specific regions
                     while (i < command_length / 2 - 1) {
@@ -99,11 +113,15 @@ int main(int argc, char *argv[])
                         region_number = command[(i+1)*2+1][0] - '0';
                         if (region_number < 0 || region_number >= REGION_NUM)   goto err_outofbound;
 
-                        sprintf(temp, "Area : %d - Mild : %d | Severe : %d\n", region_number, mild_case[region_number], severe_case[region_number]);
+                        n = sprintf(temp, "Area : %d - Mild : %d | Severe : %d\n", region_number, mild_case[region_number], severe_case[region_number]);
                         strcat(snd, temp);
                         i++;     
                     }
-                    if (write(connfd, snd, sizeof(snd)) == -1)    goto err_write;
+                    if ((n = write(connfd, snd, sizeof(snd))) == -1) {
+                        if (DEBUG)  fprintf(stderr, "[Confirmed case (specific)] ");
+                        goto err_write;
+                    }
+                    printf("Server sends: %s\n", snd);
                 } else {
                     // User command format error - exit
                     goto err_input_confirmed_case;
@@ -117,29 +135,41 @@ int main(int argc, char *argv[])
                     while (i < (command_length - 2) / 4) {
                         if (strstr(command[i*4+2], "Area") == NULL)   goto err_input_reporting_system;
 
+                        // Obtain the region of reported confirmed cases
                         region_number = command[i*4+3][0] - '0';
                         largest_region_number = (largest_region_number < region_number) ? region_number : largest_region_number;
                         if (region_number < 0 || region_number >= REGION_NUM)   goto err_outofbound;
 
                         if (strstr(command[(i+1)*4], "Mild") == NULL && strstr(command[(i+1)*4], "Severe") == NULL)   goto err_input_reporting_system;
 
+                        // Add new cases to the buffer
                         case_number = atoi(command[(i+1)*4+1]);
                         if (strstr(command[(i+1)*4], "Mild") != NULL) {
                             mild_case[region_number] += case_number;
-                            sprintf(temp, "Area %d | Mild %d\n", region_number, case_number);
+                            n = sprintf(temp, "Area %d | Mild %d\n", region_number, case_number);
                         } else if (strstr(command[(i+1)*4], "Severe") != NULL) {
                             severe_case[region_number] += case_number;
-                            sprintf(temp, "Area %d | Severe %d\n", region_number, case_number);
+                            n = sprintf(temp, "Area %d | Severe %d\n", region_number, case_number);
                         }
 
                         strcat(snd, temp);
                         i++;
                     }
+                    // waiting messages
                     strcpy(temp, "Please wait a few seconds...\n");
-                    if (write(connfd, temp, sizeof(temp)) == -1)    goto err_write;
+                    if (write(connfd, temp, strlen(temp)) == -1) {
+                        if (DEBUG)  fprintf(stderr, "[Reporting system (waiting message)] ");
+                        goto err_write;
+                    }
+                    printf("Server sends: %s\n", temp);
 
                     sleep(largest_region_number);   // sleep for <largest_region_number> seconds
-                    if (write(connfd, snd, sizeof(snd)) == -1)    goto err_write;
+                    // result messages
+                    if ((n = write(connfd, snd, sizeof(snd))) == -1) {
+                        if (DEBUG)  fprintf(stderr, "[Reporting system (result message)] ");
+                        goto err_write;
+                    }
+                    printf("Server sends: %s\n", snd);
                 } else {
                     // User command format error - exit
                     goto err_input_reporting_system;
@@ -149,7 +179,10 @@ int main(int argc, char *argv[])
                 // 3. Exit
                 break;
             }
-            
+
+            // Clear the command line buffer
+            for (i = 0; i < command_length; i++)
+                memset(command[i], 0, STRING_SIZE);            
         }
         
         /* Connection has terminated somehow. */
